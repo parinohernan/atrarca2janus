@@ -1,0 +1,41 @@
+# Dependencias
+node_modules/
+
+# Entornos
+.env
+.env.*
+
+# Logs y diagnósticos
+logs/
+*.log
+npm-debug.log*
+yarn-error.log
+
+# Builds/coverage
+/dist/
+/build/
+/coverage/
+
+# SO/Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Certificados y claves
+*.pem
+*.der
+*.b64
+*.key
+*.crt
+*.pfx
+
+# Archivos sensibles de la app
+src/certs/
+src/temp/
+# Respaldos/exports que no deberían ir al repo
+src/backup/*.json
+
+# Otros temporales
+*.tmp
+*.temp 

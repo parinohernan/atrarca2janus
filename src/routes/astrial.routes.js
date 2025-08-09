@@ -1,0 +1,29 @@
+const express = require("express");
+const router = express.Router();
+const astrialController = require("../controllers/astrial.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+
+// Rutas sin autenticación
+router.get("/facturas-sin-cae", astrialController.getFacturasSinCAE);
+
+// Rutas con autenticación (ejemplo)
+router.post(
+  "/grabar-cae",
+  //   authMiddleware.authenticateToken,
+  astrialController.grabarCAE
+);
+
+router.get("/diagnosticar-bd", astrialController.diagnosticarBD);
+
+router.get(
+  "/verificar-estructura-factura",
+  astrialController.verificarEstructuraFactura
+);
+
+// Ruta para verificar el estado del CAE
+router.get(
+  "/verificar-cae/:tipo/:puntoVenta/:numero",
+  astrialController.verificarCAE
+);
+
+module.exports = router;
