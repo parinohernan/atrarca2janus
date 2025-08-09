@@ -17,7 +17,7 @@ class WSAAService {
   constructor() {
     // Configuración general
     this.mode = process.env.AFIP_MODE || "testing";
-    this.tokenPath = path.resolve(__dirname, "../temp/");
+    this.tokenPath = path.resolve(process.cwd(), "src/temp/");
     this.tokens = {}; // Será un objeto con formato: {cuit: {service: tokenData}}
 
     // Inicializar servicio de certificados seguros
@@ -260,6 +260,12 @@ class WSAAService {
       </header>
       <service>${service}</service>
     </loginTicketRequest>`;
+
+    // Asegurarse de que existe el directorio temporal
+    if (!fs.existsSync(this.tokenPath)) {
+      fs.mkdirSync(this.tokenPath, { recursive: true });
+      console.log(`📁 Directorio temporal creado: ${this.tokenPath}`);
+    }
 
     // Guardar TRA temporalmente para debug
     const traPath = path.resolve(this.tokenPath, "TRA.xml");

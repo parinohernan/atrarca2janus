@@ -1,0 +1,2 @@
+# Este archivo asegura que el directorio src/temp/ se incluya en el repositorio
+# El directorio es necesario para almacenar archivos temporales de AFIP (TRA, tokens, etc.) 
