@@ -5,7 +5,8 @@
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
-    "dev": "nodemon --config nodemon.json src/app.js"
+    "dev": "nodemon --config nodemon.json src/app.js",
+    "build:prod": "echo 'Verificando certificados cifrados...' && node scripts/verify-encrypted-certs.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: atrarca-afip-api
+    runtime: node
+    plan: free
+    region: oregon
+    branch: produccion
+    buildCommand: npm install && npm run build:prod
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: AFIP_MODE
+        value: production
+      - key: USE_ENCRYPTED_CERTS
+        value: true
+      # Variables que se configurarán en el dashboard de Render
+      - key: CLAVE_CIFRADO
+        sync: false
+      - key: EMPRESA_CUIT
+        sync: false
+      - key: EMPRESA_RAZON_SOCIAL
+        sync: false
+      - key: EMPRESA_CERTIFICADO
+        sync: false
+      - key: EMPRESA_KEY
+        sync: false
+      - key: EMPRESA_DB_TYPE
+        sync: false
+      - key: EMPRESA_DB_HOST
+        sync: false
+      - key: EMPRESA_DB_PORT
+        sync: false
+      - key: EMPRESA_DB_USER
+        sync: false
+      - key: EMPRESA_DB_PASSWORD
+        sync: false
+      - key: EMPRESA_DB_NAME
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+    healthCheckPath: /
+    autoDeploy: true
