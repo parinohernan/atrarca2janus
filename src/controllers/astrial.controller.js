@@ -1,6 +1,13 @@
 console.log("CLAVE: CONTROLADOR CORRECTO CARGADO");
 const dbService = require("../services/db.service");
 const afipService = require("../services/afip.service");
+const {
+  esNotaCreditoDebito,
+  mapearTipoFacturaAfip,
+} = require("../utils/afipComprobantes.util");
+const {
+  mapearCondicionIvaReceptor,
+} = require("../utils/condicionIvaReceptor.util");
 const dotenv = require("dotenv");
 dotenv.config();
 // Mapeo de tipos de comprobante Astrial a AFIP
@@ -236,6 +243,7 @@ exports.grabarCAE = async (req, res) => {
       SELECT d.*, 
              c.cuit as ClienteCUIT, 
              c.tipodocumento as ClienteTipoDoc,
+             c.CategoriaIva as ClienteCategoriaIva,
              d.${clienteField} as CodigoClienteReal
       FROM ${tabla} d
       LEFT JOIN t_clientes c ON TRIM(d.${clienteField}) = TRIM(c.codigo)
@@ -265,6 +273,7 @@ exports.grabarCAE = async (req, res) => {
         codigo: documento[clienteField],
         cuit: documento.ClienteCUIT,
         tipoDoc: documento.ClienteTipoDoc,
+        categoriaIva: documento.ClienteCategoriaIva,
       }
     );
 
@@ -376,11 +385,15 @@ exports.grabarCAE = async (req, res) => {
         });
       }
 
-      // Asegurar que la fecha no sea futura
-      const fechaActual = new Date()
-        .toISOString()
-        .slice(0, 10)
-        .replace(/-/g, "");
+      // Asegurar que la fecha no sea futura (día calendario de Argentina, no UTC)
+      const fechaActual = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Argentina/Buenos_Aires",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .format(new Date())
+        .replaceAll("-", "");
       const fechaDocumento = documento.Fecha
         ? new Date(documento.Fecha).toISOString().slice(0, 10).replace(/-/g, "")
         : fechaActual;
@@ -402,6 +415,11 @@ exports.grabarCAE = async (req, res) => {
         tipoDocReceptor: tipoDocReceptor,
         nroDocReceptor: nroDocReceptor,
         cuitCliente: nroDocReceptor, // Agregar cuitCliente para el servicio AFIP
+        categoriaIvaReceptor: documento.ClienteCategoriaIva,
+        condicionIVAReceptorId: mapearCondicionIvaReceptor(
+          documento.ClienteCategoriaIva,
+          mapearTipoComprobante(tipo)
+        ),
         alicuotaIva: parseFloat(documento.PorcentajeIva1) || 21, // Mantener para compatibilidad
         condicionVenta: 1, // 1 = Contado
         alicuotasIVA: alicuotasIVA.map((iva) => ({
@@ -416,55 +434,50 @@ exports.grabarCAE = async (req, res) => {
       console.log("🔍 CLAVE: Tipo mapeado:", datosComprobante.tipoComprobante);
       console.log(
         "🔍 CLAVE: ¿Es nota de crédito/débito?",
-        datosComprobante.tipoComprobante === 2 ||
-          datosComprobante.tipoComprobante === 3
+        esNotaCreditoDebito(datosComprobante.tipoComprobante)
       );
 
       // Para notas de crédito y débito, obtener el comprobante asociado
-      if (
-        datosComprobante.tipoComprobante === 2 ||
-        datosComprobante.tipoComprobante === 3
-      ) {
+      if (esNotaCreditoDebito(datosComprobante.tipoComprobante)) {
         console.log("✅ CLAVE: Procesando nota de crédito/débito...");
 
-        // Los datos del comprobante asociado ya están en el documento
         if (
           documento.factura_tipo &&
           documento.factura_sucursal &&
           documento.factura_numero
         ) {
+          const tipoFacturaAfip = mapearTipoFacturaAfip(documento.factura_tipo);
           console.log("✅ CLAVE: Datos del comprobante asociado encontrados:", {
             factura_tipo: documento.factura_tipo,
             factura_sucursal: documento.factura_sucursal,
             factura_numero: documento.factura_numero,
+            tipoFacturaAfip,
           });
 
-          // Mapear el tipo de factura a número
-          const tipoFacturaMap = {
-            A: 1,
-            B: 6,
-            C: 11,
-            E: 19,
-            M: 51,
-          };
+          if (tipoFacturaAfip == null) {
+            console.warn(
+              "⚠️ CLAVE: No se pudo mapear factura_tipo a código AFIP:",
+              documento.factura_tipo
+            );
+          } else {
+            datosComprobante.comprobanteAsociado = {
+              tipo: tipoFacturaAfip,
+              puntoVenta: documento.factura_sucursal,
+              numero: documento.factura_numero,
+            };
 
-          datosComprobante.comprobanteAsociado = {
-            tipo: tipoFacturaMap[documento.factura_tipo] || 1,
-            puntoVenta: documento.factura_sucursal,
-            numero: documento.factura_numero,
-          };
-
-          console.log(
-            "✅ CLAVE: Comprobante asociado agregado:",
-            datosComprobante.comprobanteAsociado
-          );
+            console.log(
+              "✅ CLAVE: Comprobante asociado agregado:",
+              datosComprobante.comprobanteAsociado
+            );
+          }
         } else {
           console.warn(
-            "⚠️ CLAVE: No se encontraron datos del comprobante asociado"
+            "⚠️ CLAVE: No se encontraron datos del comprobante asociado (factura_tipo/sucursal/numero)"
           );
         }
       } else {
-        console.log("❌ CLAVE: No es nota de crédito/débito");
+        console.log("ℹ️ CLAVE: No es nota de crédito/débito");
       }
 
       console.log("🔍 CLAVE: Datos finales enviados al servicio:", {
@@ -567,13 +580,16 @@ function mapearTipoComprobante(tipoAstrial) {
   const mapa = {
     FCA: 1, // Factura A
     FCB: 6, // Factura B
+    FCC: 11, // Factura C
     NCA: 3, // Nota de Crédito A
     NDA: 2, // Nota de Débito A
     NCB: 8, // Nota de Crédito B
     NDB: 7, // Nota de Débito B
+    NCC: 13, // Nota de Crédito C
+    NDC: 12, // Nota de Débito C
   };
 
-  return mapa[tipoAstrial] || 1; // Default a Factura A si no se encuentra
+  return mapa[tipoAstrial] || 1;
 }
 
 // Endpoint para diagnosticar la base de datos

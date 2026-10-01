@@ -1,5 +1,9 @@
 const soap = require("soap");
 const wsaaService = require("./wsaa.service");
+const { esNotaCreditoDebito } = require("../utils/afipComprobantes.util");
+const {
+  mapearCondicionIvaReceptor,
+} = require("../utils/condicionIvaReceptor.util");
 const fs = require("fs");
 const path = require("path");
 
@@ -129,27 +133,38 @@ class AfipService {
     }
   }
 
-  // Método para formatear errores de AFIP en un mensaje legible
+  // Método para formatear errores u observaciones de AFIP en un mensaje legible
   formatearErrores(errors) {
     try {
       if (!errors) return "Error desconocido";
 
-      // Si es un arreglo de errores
+      // Observaciones (FECAEDetResponse)
+      if (Array.isArray(errors.Obs)) {
+        return errors.Obs.map((e) => `Código ${e.Code}: ${e.Msg}`).join(". ");
+      }
+      if (errors.Obs) {
+        return `Código ${errors.Obs.Code}: ${errors.Obs.Msg}`;
+      }
+
+      // Errores (Errors / Err)
       if (Array.isArray(errors.Err)) {
         return errors.Err.map((e) => `Código ${e.Code}: ${e.Msg}`).join(". ");
       }
-
-      // Si es un solo error
       if (errors.Err) {
         return `Código ${errors.Err.Code}: ${errors.Err.Msg}`;
       }
 
-      // Si tiene una estructura diferente
       return JSON.stringify(errors);
     } catch (error) {
       console.error("Error al formatear errores:", error);
       return "Error al procesar la respuesta de AFIP";
     }
+  }
+
+  extraerDetalleCae(resultado) {
+    const raw = resultado?.FECAESolicitarResult?.FeDetResp?.FECAEDetResponse;
+    if (!raw) return null;
+    return Array.isArray(raw) ? raw[0] : raw;
   }
 
   // Método para obtener CAE con backup
@@ -215,6 +230,15 @@ class AfipService {
       // Obtener cliente SOAP
       const client = await this.getWSFEClient();
 
+      const condicionIVAReceptorId = mapearCondicionIvaReceptor(
+        datosComprobante.condicionIVAReceptorId ??
+          datosComprobante.categoriaIvaReceptor,
+        datosComprobante.tipoComprobante
+      );
+      console.log(
+        `CondicionIVAReceptorId=${condicionIVAReceptorId} (categoria=${datosComprobante.categoriaIvaReceptor || datosComprobante.condicionIVAReceptorId || "default"})`
+      );
+
       // Preparar datos del comprobante
       const comprobante = {
         Concepto: 1, // Productos
@@ -222,7 +246,7 @@ class AfipService {
         DocNro: datosComprobante.cuitCliente,
         CbteDesde: datosComprobante.numero,
         CbteHasta: datosComprobante.numero,
-        CbteFch: this.formatearFecha(new Date()),
+        CbteFch: datosComprobante.fecha || this.formatearFecha(new Date()),
         ImpTotal: Math.round(datosComprobante.importeTotal * 100) / 100,
         ImpTotConc: 0,
         ImpNeto: Math.round(datosComprobante.importeNeto * 100) / 100,
@@ -234,6 +258,7 @@ class AfipService {
         FchVtoPago: null,
         MonId: "PES",
         MonCotiz: 1,
+        CondicionIVAReceptorId: condicionIVAReceptorId,
         Tributos: null,
         Iva: {
           AlicIva: datosComprobante.alicuotasIVA.map((iva) => ({
@@ -245,16 +270,14 @@ class AfipService {
         Opcionales: null,
       };
 
-      // Para notas de crédito (3) y débito (2), agregar comprobantes asociados
+      // Notas de crédito/débito (A/B/C): AFIP exige CbteAsoc
+      const tipoCbte = Number(datosComprobante.tipoComprobante);
       console.log(
         "🔍 CLAVE AFIP: Verificando tipo de comprobante:",
-        datosComprobante.tipoComprobante
+        tipoCbte
       );
 
-      if (
-        datosComprobante.tipoComprobante === 2 ||
-        datosComprobante.tipoComprobante === 3
-      ) {
+      if (esNotaCreditoDebito(tipoCbte)) {
         console.log(
           "✅ CLAVE AFIP: Tipo de comprobante es nota de crédito/débito, procesando..."
         );
@@ -267,18 +290,30 @@ class AfipService {
           datosComprobante.comprobantesAsociados
         );
 
-        if (datosComprobante.comprobanteAsociado) {
-          comprobante.CbtesAsoc = {
-            CbteAsoc: [
-              {
-                Tipo: datosComprobante.comprobanteAsociado.tipo,
-                PtoVta: datosComprobante.comprobanteAsociado.puntoVenta,
-                Nro: datosComprobante.comprobanteAsociado.numero,
-              },
-            ],
-          };
+        const asociados = [];
+        if (Array.isArray(datosComprobante.comprobantesAsociados)) {
+          for (const c of datosComprobante.comprobantesAsociados) {
+            if (c?.tipo != null && c?.puntoVenta != null && c?.numero != null) {
+              asociados.push({
+                Tipo: Number(c.tipo),
+                PtoVta: Number(c.puntoVenta),
+                Nro: Number(c.numero),
+              });
+            }
+          }
+        } else if (datosComprobante.comprobanteAsociado) {
+          const c = datosComprobante.comprobanteAsociado;
+          asociados.push({
+            Tipo: Number(c.tipo),
+            PtoVta: Number(c.puntoVenta),
+            Nro: Number(c.numero),
+          });
+        }
+
+        if (asociados.length > 0) {
+          comprobante.CbtesAsoc = { CbteAsoc: asociados };
           console.log(
-            "✅ CLAVE AFIP: Comprobante asociado agregado:",
+            "✅ CLAVE AFIP: Comprobante(s) asociado(s) agregado(s):",
             JSON.stringify(comprobante.CbtesAsoc, null, 2)
           );
         } else {
@@ -288,8 +323,8 @@ class AfipService {
         }
       } else {
         console.log(
-          "❌ CLAVE AFIP: Tipo de comprobante no es nota de crédito/débito:",
-          datosComprobante.tipoComprobante
+          "ℹ️ CLAVE AFIP: Tipo de comprobante no es nota de crédito/débito:",
+          tipoCbte
         );
       }
 
@@ -336,40 +371,33 @@ class AfipService {
         throw new Error("Respuesta de AFIP sin estructura esperada");
       }
 
-      // Verificar errores en el cabecero
-      if (resultado.FECAESolicitarResult.FeCabResp.Resultado !== "A") {
+      const detalle = this.extraerDetalleCae(resultado);
+      if (!detalle) {
+        throw new Error("Respuesta de AFIP sin detalles de comprobante");
+      }
+
+      const cabResultado = resultado.FECAESolicitarResult.FeCabResp?.Resultado;
+      if (cabResultado !== "A" || detalle.Resultado !== "A") {
         const errors = this.formatearErrores(
-          resultado.FECAESolicitarResult.Errors
+          resultado.FECAESolicitarResult.Errors ||
+            detalle.Observaciones
         );
         throw new Error(`Error de AFIP: ${errors}`);
       }
 
-      // Verificar que haya detalles en la respuesta
-      if (
-        !resultado.FECAESolicitarResult.FeDetResp ||
-        !resultado.FECAESolicitarResult.FeDetResp.FECAEDetResponse ||
-        !resultado.FECAESolicitarResult.FeDetResp.FECAEDetResponse[0]
-      ) {
-        throw new Error("Respuesta de AFIP sin detalles de comprobante");
-      }
-
-      // Extraer datos del CAE
-      const detalle =
-        resultado.FECAESolicitarResult.FeDetResp.FECAEDetResponse[0];
-
-      if (detalle.Resultado !== "A") {
-        const errors = this.formatearErrores(detalle.Observaciones);
-        throw new Error(`Error en comprobante: ${errors}`);
-      }
+      const obsList = detalle.Observaciones?.Obs;
+      const obsNormalizadas = obsList
+        ? Array.isArray(obsList)
+          ? obsList
+          : [obsList]
+        : [];
 
       const cae = {
         cae: detalle.CAE,
         caeVencimiento: detalle.CAEFchVto,
-        observaciones: detalle.Observaciones
-          ? detalle.Observaciones.Obs.map(
-              (obs) => `${obs.Code}: ${obs.Msg}`
-            ).join("; ")
-          : "",
+        observaciones: obsNormalizadas
+          .map((obs) => `${obs.Code}: ${obs.Msg}`)
+          .join("; "),
         fromBackup: false,
       };
 
@@ -401,12 +429,18 @@ class AfipService {
     }
   }
 
-  // Método para formatear fecha en formato requerido por AFIP (YYYYMMDD)
+  // Método para formatear fecha en formato requerido por AFIP (YYYYMMDD).
+  // El día calendario es el de Argentina: el contenedor corre en UTC y,
+  // después de las 21:00, getDate() ya es el día siguiente.
   formatearFecha(fecha) {
-    const year = fecha.getFullYear();
-    const month = String(fecha.getMonth() + 1).padStart(2, "0");
-    const day = String(fecha.getDate()).padStart(2, "0");
-    return `${year}${month}${day}`;
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Argentina/Buenos_Aires",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .format(fecha)
+      .replaceAll("-", "");
   }
 }
 
