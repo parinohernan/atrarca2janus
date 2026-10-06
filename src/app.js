@@ -3,6 +3,9 @@ require("dotenv").config({
   path: require("path").resolve(__dirname, "../.env"),
 });
 
+// La configuración guardada desde /api/admin tiene prioridad sobre el .env
+require("./services/empresa-config.service").cargar();
+
 // Verificar que se cargó correctamente
 console.log("Variables de entorno cargadas:");
 console.log("AFIP_MODE:", process.env.AFIP_MODE);

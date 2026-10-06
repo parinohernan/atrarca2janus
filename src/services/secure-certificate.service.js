@@ -80,6 +80,34 @@ class SecureCertificateService {
   }
 
   /**
+   * Cifrar un certificado o clave recibido en memoria y guardarlo en cert_cifrados
+   * @param {Buffer} buffer - Contenido sin cifrar
+   * @param {string} nombre - Nombre original del archivo (ej: fontanella_20261005.crt)
+   * @returns {string} - Ruta del archivo cifrado
+   */
+  encryptBuffer(buffer, nombre) {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv(this.algorithm, this.secretKey, iv);
+    const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+
+    const result = {
+      iv: iv.toString("hex"),
+      authTag: cipher.getAuthTag().toString("hex"),
+      encryptedData: encrypted.toString("hex"),
+      originalName: nombre,
+      timestamp: new Date().toISOString(),
+    };
+
+    const encryptedPath = this.getEncryptedPath(nombre);
+    fs.mkdirSync(path.dirname(encryptedPath), { recursive: true });
+    fs.writeFileSync(encryptedPath, JSON.stringify(result, null, 2));
+    this.certificateCache.delete(nombre);
+
+    console.log(`🔐 Certificado cifrado guardado: ${encryptedPath}`);
+    return encryptedPath;
+  }
+
+  /**
    * Obtener la ruta del archivo cifrado
    * @param {string} originalPath - Ruta original del certificado
    * @returns {string} - Ruta del archivo cifrado

@@ -546,6 +546,160 @@ Graba un CAE en una factura o nota de crédito.
 
 ---
 
+## 🛠️ Administración de empresa (`/api/admin`)
+
+Cada instancia (`atrarca-<nombre>.janus314.com.ar`) administra **su propia empresa**. Sirve para dar de alta una empresa nueva desde la web y para renovar certificados vencidos sin tocar archivos en el servidor.
+
+**Requisitos en el `.env` de la instancia** (`apps/envs/atrarca-<nombre>.env`):
+
+```bash
+ATRARCA_INSTANCIA=fontanella   # nombre único de la instancia
+ADMIN_API_KEY=<clave larga>    # sin esta variable los endpoints responden 503
+CLAVE_CIFRADO=...              # se usa para cifrar certificados y configuración
+```
+
+**Autenticación:** todas las rutas requieren el header `x-admin-key: <ADMIN_API_KEY>`. Si falta o es incorrecto, responden 401.
+
+**Dónde se guarda:**
+
+- Los datos de la empresa van cifrados en `config/instancias/<ATRARCA_INSTANCIA>.json` y tienen prioridad sobre el `.env`.
+- El certificado y la key se guardan cifrados en `cert_cifrados/<instancia>_<fecha-hora>.crt|.key.encrypted`. Las versiones sin cifrar nunca se escriben en disco, y las anteriores quedan como respaldo.
+
+**Reinicio:** después de guardar cambios (`PUT` o renovación), la instancia se reinicia sola y tarda unos 20 a 30 segundos en volver.
+
+### GET `/api/admin/empresa`
+
+Devuelve la configuración vigente (con la contraseña de la base enmascarada) y los datos del certificado activo.
+
+```bash
+curl -H "x-admin-key: $ADMIN_API_KEY" https://atrarca-fontanella.janus314.com.ar/api/admin/empresa
+```
+
+```json
+{
+  "success": true,
+  "instancia": "fontanella",
+  "empresa": {
+    "cuit": "20123456789",
+    "razonSocial": "Fontanella SA",
+    "certificado": "./src/certs/fontanella_20261006-020524.crt",
+    "key": "./src/certs/fontanella_20261006-020524.key",
+    "dbType": "mysql",
+    "dbHost": "54.39.97.149",
+    "dbPort": "3306",
+    "dbUser": "root",
+    "dbPassword": "********",
+    "dbName": "db_sis_fac",
+    "afipMode": "production"
+  },
+  "certificado": {
+    "archivo": "fontanella_20261006-020524.crt",
+    "cuit": "20123456789",
+    "validoDesde": "2026-10-06T02:05:16.000Z",
+    "validoHasta": "2028-10-05T02:05:16.000Z",
+    "diasRestantes": 729,
+    "vencido": false
+  }
+}
+```
+
+### PUT `/api/admin/empresa`
+
+Alta o edición de la empresa. Se envía como `multipart/form-data`. Todos los campos son opcionales: se actualizan solo los que se mandan.
+
+| Campo | Descripción |
+|-------|-------------|
+| `cuit` | 11 dígitos sin guiones |
+| `razonSocial` | Razón social |
+| `dbType`, `dbHost`, `dbPort`, `dbUser`, `dbPassword`, `dbName` | Base de datos del sistema de facturación |
+| `afipMode` | `production` o `testing` |
+| `certificado` (archivo) | `.crt`/`.pem` emitido por ARCA (PEM o DER) |
+| `key` (archivo) | Clave privada sin contraseña (PEM o DER) |
+
+```bash
+curl -X PUT https://atrarca-fontanella.janus314.com.ar/api/admin/empresa \
+  -H "x-admin-key: $ADMIN_API_KEY" \
+  -F cuit=20123456789 -F "razonSocial=Fontanella SA" \
+  -F dbHost=54.39.97.149 -F dbPort=3306 -F dbUser=root \
+  -F dbPassword=xxxx -F dbName=db_sis_fac \
+  -F certificado=@fontanella.crt -F key=@fontanella.key
+```
+
+Validaciones de los archivos (responden 400 con `error`):
+
+- El certificado y la key se envían juntos.
+- La key tiene que corresponder al certificado.
+- El certificado no puede estar vencido.
+- El CUIT del certificado (`serialNumber=CUIT ...`) tiene que coincidir con el de la empresa.
+- Máximo 100 KB por archivo. Los `.pfx` no se aceptan.
+
+Respuesta: `{ "success": true, "reiniciando": true, ... }`.
+
+### POST `/api/admin/empresa/certificado`
+
+Renovación de certificado: recibe solo los archivos `certificado` y `key`, con las mismas validaciones, y además borra el token WSAA cacheado de ese CUIT.
+
+```bash
+curl -X POST https://atrarca-fontanella.janus314.com.ar/api/admin/empresa/certificado \
+  -H "x-admin-key: $ADMIN_API_KEY" \
+  -F certificado=@nuevo.crt -F key=@nueva.key
+```
+
+### POST `/api/admin/empresa/verificar`
+
+Prueba la conexión a la base de datos y la autenticación contra ARCA (WSAA) con la configuración vigente. Siempre responde 200; el resultado está en `success`.
+
+```json
+{
+  "instancia": "fontanella",
+  "cuit": "20123456789",
+  "certificado": { "diasRestantes": 729, "vencido": false },
+  "baseDatos": { "ok": true },
+  "afip": { "ok": false, "error": "Error en el servicio WSAA: ns1:coe.notAuthorized: ..." },
+  "success": false
+}
+```
+
+Errores típicos de `afip.error`:
+
+- `cms.cert.untrusted`: el certificado no fue emitido por ARCA.
+- `coe.notAuthorized`: el certificado no está asociado al servicio de facturación electrónica (wsfe) en ARCA, o el CUIT no corresponde.
+
+### Uso desde una web
+
+```js
+const form = new FormData();
+form.append("cuit", "20123456789");
+form.append("razonSocial", "Fontanella SA");
+form.append("certificado", inputCert.files[0]);
+form.append("key", inputKey.files[0]);
+
+const resp = await fetch("https://atrarca-fontanella.janus314.com.ar/api/admin/empresa", {
+  method: "PUT", // o POST a /api/admin/empresa/certificado para renovar
+  headers: { "x-admin-key": adminKey }, // no fijar Content-Type: lo arma FormData
+  body: form,
+});
+const data = await resp.json();
+// Esperar unos 30 s y llamar a POST /api/admin/empresa/verificar
+```
+
+La `ADMIN_API_KEY` no tiene que quedar en el código del navegador: pedila al usuario administrador o enviala desde un backend.
+
+### Flujo para una empresa nueva
+
+1. Crear el contenedor y el túnel (`docker-compose.yml` y `.cloudflared/config.yml`) con un `.env` mínimo: `ATRARCA_INSTANCIA`, `ADMIN_API_KEY`, `CLAVE_CIFRADO`, `AFIP_MODE` y `NODE_ENV`.
+2. `PUT /api/admin/empresa` con los datos, el certificado y la key.
+3. Esperar el reinicio y llamar a `POST /api/admin/empresa/verificar`.
+4. En ARCA, habilitar el punto de venta para Web Services si aparece el error 11002 al facturar.
+
+### Renovación de certificado
+
+1. Generar el nuevo certificado en ARCA y asociarlo al servicio wsfe.
+2. `POST /api/admin/empresa/certificado` con el nuevo `.crt` y su `.key`.
+3. Esperar el reinicio y llamar a `POST /api/admin/empresa/verificar`. Para controlar vencimientos, revisar `certificado.diasRestantes` en el `GET`.
+
+---
+
 ## 🌐 Generales
 
 ### GET `/api/test`

@@ -3,6 +3,7 @@ const router = express.Router();
 const authRoutes = require("./auth.routes");
 const afipRoutes = require("./afip.routes");
 const astrialRoutes = require("./astrial.routes");
+const adminRoutes = require("./admin.routes");
 
 // Rutas de autenticación
 router.use("/auth", authRoutes);
@@ -12,6 +13,9 @@ router.use("/afip", afipRoutes);
 
 // Rutas de Astrial
 router.use("/astrial", astrialRoutes);
+
+// Administración de la empresa de esta instancia (x-admin-key)
+router.use("/admin", adminRoutes);
 
 // Ruta de prueba para verificar que el router está funcionando
 router.get("/test", (req, res) => {
