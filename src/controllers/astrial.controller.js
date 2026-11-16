@@ -208,7 +208,7 @@ exports.grabarCAE = async (req, res) => {
       });
     }
 
-    const { tipo, puntoVenta, numero, solicitarCAE } = req.body;
+    const { tipo, puntoVenta, numero, solicitarCAE, comprobanteAsociado } = req.body;
 
     // Validar que todos los campos requeridos estén presentes
     if (!tipo || !puntoVenta || !numero) {
@@ -234,7 +234,7 @@ exports.grabarCAE = async (req, res) => {
     }
 
     // Determinar si es factura o nota de crédito
-    const esNotaCredito = tipo === "NCA" || tipo === "NCB";
+    const esNotaCredito = tipo === "NCA" || tipo === "NCB" || tipo === "NCC";
     const tabla = esNotaCredito ? "notacreditocabeza" : "facturacabeza";
     const clienteField = esNotaCredito ? "CodigoCliente" : "ClienteCodigo";
 
@@ -441,29 +441,33 @@ exports.grabarCAE = async (req, res) => {
       if (esNotaCreditoDebito(datosComprobante.tipoComprobante)) {
         console.log("✅ CLAVE: Procesando nota de crédito/débito...");
 
-        if (
-          documento.factura_tipo &&
-          documento.factura_sucursal &&
-          documento.factura_numero
-        ) {
-          const tipoFacturaAfip = mapearTipoFacturaAfip(documento.factura_tipo);
+        const tipoAsociado =
+          comprobanteAsociado?.tipo || documento.factura_tipo;
+        const sucursalAsociada =
+          comprobanteAsociado?.puntoVenta || documento.factura_sucursal;
+        const numeroAsociado =
+          comprobanteAsociado?.numero || documento.factura_numero;
+
+        if (tipoAsociado && sucursalAsociada && numeroAsociado) {
+          const tipoFacturaAfip = mapearTipoFacturaAfip(tipoAsociado);
           console.log("✅ CLAVE: Datos del comprobante asociado encontrados:", {
-            factura_tipo: documento.factura_tipo,
-            factura_sucursal: documento.factura_sucursal,
-            factura_numero: documento.factura_numero,
+            factura_tipo: tipoAsociado,
+            factura_sucursal: sucursalAsociada,
+            factura_numero: numeroAsociado,
             tipoFacturaAfip,
+            origen: comprobanteAsociado?.tipo ? "pedido" : "base",
           });
 
           if (tipoFacturaAfip == null) {
             console.warn(
               "⚠️ CLAVE: No se pudo mapear factura_tipo a código AFIP:",
-              documento.factura_tipo
+              tipoAsociado
             );
           } else {
             datosComprobante.comprobanteAsociado = {
               tipo: tipoFacturaAfip,
-              puntoVenta: documento.factura_sucursal,
-              numero: documento.factura_numero,
+              puntoVenta: sucursalAsociada,
+              numero: numeroAsociado,
             };
 
             console.log(
